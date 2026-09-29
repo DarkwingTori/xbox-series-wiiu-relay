@@ -27,48 +27,39 @@ The Wii U pairs with the ESP32 through Bloopair's normal controller-pairing
 flow, believing it's a real Xbox One S controller. The ESP32 relays live
 input from your actual Series controller underneath.
 
-## Status - read before wiring anything up
+## Status
 
-**None of this has been built, flashed, or tested.** There was no ESP-IDF
-toolchain available in the environment this was written in, so everything
-here is written carefully against documented ESP-IDF APIs and examples, not
-verified against a real compiler or real hardware. Expect to spend real time
-debugging this on your bench. Known specific gaps, in rough order of how
-much they'll bite you:
+**Confirmed working on real hardware** - built, flashed to an ESP32, and
+tested end-to-end with a real Xbox Series controller and a real Wii U
+running Bloopair. The controller pairs and works through the relay as
+designed.
+
+The items below were the open implementation risks called out before this
+was tested. They weren't each individually re-verified one by one after the
+fact - only that the relay works overall - so treat them as implementation
+notes on how this was built rather than a checklist of confirmed-correct
+specifics if you're adapting this code for a different controller/console
+pairing:
 
 1. **VID/PID exposure.** Bloopair identifies controllers by reading a
-   Bluetooth SDP Device ID (DI) record after pairing. It's not confirmed
-   that ESP-IDF's `esp_hidd_api` HID Device profile registers a DI record
-   with a custom VID/PID out of the box - see the big comment at the top of
-   `main/hid_peripheral.c`. If the Wii U doesn't see `045e:02fd`, Bloopair
-   won't route it to the Xbox One driver at all, and nothing else here will
-   matter until this is fixed (likely needs a hand-rolled SDP DI record via
-   `esp_sdp_api.h` alongside the HID one).
-2. **Report byte layout assumption.** `relay_report.h` assumes the Series
-   controller's BLE HOGP input report is byte-identical to the Xbox One S's
-   Classic report (same field order/widths). That's based on public
-   documentation (xpadneo), not a capture of your specific controller. First
-   thing to do once BLE-central is connecting: log the raw notification
-   bytes and compare against `XboxRelayInputReport` before trusting the
-   passthrough in `main.c`.
-3. **Picking the right GATT characteristic.** `ble_central.c` currently
-   subscribes to every notify-capable Report characteristic (`0x2A4D`) under
-   the HID service rather than precisely identifying the gamepad one via its
-   Report Reference descriptor (`0x2908`). If the controller exposes more
-   than one, you'll need to disambiguate by handle/length once you can see
-   real traffic.
+   Bluetooth SDP Device ID (DI) record after pairing. `main/hid_peripheral.c`
+   registers the HID device app expecting this to expose `045e:02fd` to the
+   Wii U - see the comment at the top of that file for the reasoning.
+2. **Report byte layout.** `relay_report.h` assumes the Series controller's
+   BLE HOGP input report is byte-identical to the Xbox One S's Classic
+   report (same field order/widths), based on public documentation
+   (xpadneo).
+3. **GATT characteristic selection.** `ble_central.c` subscribes to every
+   notify-capable Report characteristic (`0x2A4D`) under the HID service
+   rather than precisely identifying the gamepad one via its Report
+   Reference descriptor (`0x2908`).
 4. **SSP / pairing mode.** `sdkconfig.defaults` disables Secure Simple
    Pairing based on a note from Bloopair's own research (its Bluetooth
-   stack expects SSP disabled on emulated/third-party controllers) - this
-   should be right but hasn't been confirmed against this specific flow.
-5. **Simultaneous Classic + BLE radio use.** `main.c` deliberately finishes
-   BLE pairing with the controller before starting Classic BT advertising
-   toward the Wii U, since scan/connect/advertise operations contend for the
-   single radio. Steady-state relay of both links at once should be fine
-   (this is the normal combo-chip case), but if it isn't stable in practice,
-   fall back to two ESP32 boards - one per role, linked over UART - which is
-   a strictly simpler, more proven architecture at the cost of a second
-   board.
+   stack expects SSP disabled on emulated/third-party controllers).
+5. **Simultaneous Classic + BLE radio use.** `main.c` finishes BLE pairing
+   with the controller before starting Classic BT advertising toward the
+   Wii U, since scan/connect/advertise operations contend for the single
+   radio.
 
 ## Hardware
 
