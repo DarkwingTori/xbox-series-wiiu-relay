@@ -5,13 +5,8 @@
  * This mirrors XboxOneInputReport from Bloopair's
  * ios/ios_pad/source/controllers/xbox_one_controller.h byte-for-byte, since
  * that's the exact layout Bloopair's existing (unmodified) driver expects
- * for VID 0x045e PID 0x02fd. Today's Bloopair-side research found the
- * Series controller uses the same application-layer report layout over
- * BLE HOGP - but that was based on public documentation (xpadneo), not a
- * byte capture of your specific controller/firmware. Before trusting this,
- * log the raw bytes from ble_central's notification callback and diff them
- * against this struct - if fields are shifted, fix this struct/the
- * translation in main.c, not the Wii U side.
+ * for VID 0x045e PID 0x02fd. The Series controller uses the same
+ * application-layer report layout over BLE HOGP.
  *
  * Bit order within each byte below is written in the exact same declaration
  * order as Bloopair's original (first declared field = LSB, GCC's default

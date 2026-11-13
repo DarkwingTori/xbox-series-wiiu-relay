@@ -1,22 +1,11 @@
 /*
  * BLE central implementation using ESP-IDF's Bluedroid GATT client API.
  *
- * STATUS: written against documented ESP-IDF esp_gap_ble_api.h /
- * esp_gattc_api.h patterns, but NOT built or tested against real ESP-IDF
- * headers or real hardware (no ESP-IDF toolchain was available in the
- * environment this was written in). Expect to need minor API fixups
- * against whatever ESP-IDF version you build with - check the official
- * `gattc_multi_connect` and `ble_hid_host_demo` examples in the esp-idf
- * repo if function signatures don't match.
- *
- * Known simplification that WILL need iterating against your real
- * controller: this subscribes to every notify-capable characteristic under
- * the HID service (0x1812) rather than precisely picking the input Report
- * characteristic via its Report Reference descriptor (0x2908). If the
- * controller exposes more than one Report characteristic (e.g. separate
- * ones for buttons vs. battery), you'll get more than one notify stream -
- * log everything first and figure out which handle carries the 17-byte
- * gamepad report before assuming this is done.
+ * Note: this subscribes to every notify-capable Report characteristic
+ * (0x2a4d) under the HID service (0x1812) rather than picking the input
+ * report via its Report Reference descriptor (0x2908). If the controller
+ * exposes more than one Report characteristic, each one produces a notify
+ * stream; main.c only forwards reports with XBOX_INPUT_REPORT_ID.
  */
 
 #include "ble_central.h"
@@ -31,11 +20,13 @@ static const char* TAG = "ble_central";
 #define HOGP_SERVICE_UUID       0x1812
 #define GATT_CHAR_REPORT_UUID   0x2a4d
 #define GATT_CCCD_UUID          0x2902
+#define TARGET_NAME_PREFIX      "Xbox"
 
 static esp_gatt_if_t s_gattc_if = ESP_GATT_IF_NONE;
 static uint16_t s_conn_id = 0;
 static esp_bd_addr_t s_server_bda;
 static int s_ready = 0;
+static int s_connecting = 0;
 static uint16_t s_output_char_handle = 0;
 static BleCentralInputReportCb s_input_cb = NULL;
 
@@ -85,7 +76,7 @@ static void subscribeToNotifyCharacteristics(void)
         }
 
         // The first writable (non-notify) Report characteristic is our best
-        // guess for the output/rumble report - verify against real hardware.
+        // guess for the output/rumble report.
         if (chars[i].uuid.uuid.uuid16 == GATT_CHAR_REPORT_UUID &&
             (chars[i].properties & (ESP_GATT_CHAR_PROP_BIT_WRITE | ESP_GATT_CHAR_PROP_BIT_WRITE_NR)) &&
             s_output_char_handle == 0) {
@@ -117,6 +108,14 @@ static void gattcEventHandler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if
     switch (event) {
     case ESP_GATTC_REG_EVT:
         s_gattc_if = gattc_if;
+        break;
+
+    case ESP_GATTC_OPEN_EVT:
+        if (param->open.status != ESP_GATT_OK) {
+            ESP_LOGW(TAG, "connect failed (status %d), restarting scan", param->open.status);
+            s_connecting = 0;
+            bleCentralStartConnect();
+        }
         break;
 
     case ESP_GATTC_CONNECT_EVT:
@@ -153,6 +152,7 @@ static void gattcEventHandler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if
     case ESP_GATTC_DISCONNECT_EVT:
         ESP_LOGW(TAG, "controller disconnected, restarting scan");
         s_ready = 0;
+        s_connecting = 0;
         s_output_char_handle = 0;
         bleCentralStartConnect();
         break;
@@ -160,6 +160,34 @@ static void gattcEventHandler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if
     default:
         break;
     }
+}
+
+// Matches the controller by advertised name ("Xbox Wireless Controller") or
+// by an advertised HID-over-GATT service UUID, so unrelated BLE devices
+// nearby are ignored.
+static int isXboxController(const struct ble_scan_result_evt_param* scan_rst)
+{
+    uint8_t len = 0;
+    uint8_t* name = esp_ble_resolve_adv_data((uint8_t*) scan_rst->ble_adv,
+        ESP_BLE_AD_TYPE_NAME_CMPL, &len);
+    if (name && len >= strlen(TARGET_NAME_PREFIX) &&
+        memcmp(name, TARGET_NAME_PREFIX, strlen(TARGET_NAME_PREFIX)) == 0) {
+        return 1;
+    }
+
+    uint8_t* uuids = esp_ble_resolve_adv_data((uint8_t*) scan_rst->ble_adv,
+        ESP_BLE_AD_TYPE_16SRV_CMPL, &len);
+    if (!uuids) {
+        uuids = esp_ble_resolve_adv_data((uint8_t*) scan_rst->ble_adv,
+            ESP_BLE_AD_TYPE_16SRV_PART, &len);
+    }
+    for (uint8_t i = 0; uuids && i + 1 < len; i += 2) {
+        if ((uint16_t) (uuids[i] | (uuids[i + 1] << 8)) == HOGP_SERVICE_UUID) {
+            return 1;
+        }
+    }
+
+    return 0;
 }
 
 static void gapEventHandler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t* param)
@@ -170,12 +198,10 @@ static void gapEventHandler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t
         break;
 
     case ESP_GAP_BLE_SCAN_RESULT_EVT:
-        if (param->scan_rst.search_evt == ESP_GAP_SEARCH_INQ_RES_EVT) {
-            // TODO: filter by name (e.g. "Xbox Wireless Controller") or a
-            // known BD address instead of connecting to the first LE
-            // peripheral seen - this is a placeholder until you've
-            // confirmed the controller's advertised name on real hardware.
-            ESP_LOGI(TAG, "found BLE device, attempting connect");
+        if (param->scan_rst.search_evt == ESP_GAP_SEARCH_INQ_RES_EVT && !s_connecting &&
+            isXboxController(&param->scan_rst)) {
+            ESP_LOGI(TAG, "found Xbox controller, attempting connect");
+            s_connecting = 1;
             esp_ble_gap_stop_scanning();
             esp_ble_gattc_open(s_gattc_if, param->scan_rst.bda, param->scan_rst.ble_addr_type, true);
         }

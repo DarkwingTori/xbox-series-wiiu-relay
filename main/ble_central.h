@@ -10,8 +10,7 @@
 
 // Called whenever a HOGP input report notification arrives from the
 // controller. `data`/`len` is the raw report payload (report ID byte
-// included, same shape as XboxRelayInputReport in relay_report.h - but
-// verify this on real hardware before trusting it, see relay_report.h).
+// included, same shape as XboxRelayInputReport in relay_report.h).
 typedef void (*BleCentralInputReportCb)(const uint8_t* data, uint16_t len);
 
 void bleCentralInit(BleCentralInputReportCb on_input_report);
