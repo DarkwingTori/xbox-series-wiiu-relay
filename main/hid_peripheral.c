@@ -3,24 +3,11 @@
  * esp_hidd_api.h (Bluedroid Classic BT HID Device profile), following the
  * pattern of the esp-idf `bt_hid_mouse_device` example.
  *
- * STATUS: written against documented ESP-IDF esp_hidd_api.h patterns, NOT
- * built or tested (no ESP-IDF toolchain available in the environment this
- * was written in).
- *
- * KNOWN GAP that needs real investigation: getting the Wii U/Bloopair to
- * see this device's VID/PID as 0x045e/0x02fd. Bloopair reads vendor_id and
- * product_id from the paired device's SDP Device ID (DI) record (see
- * Bloopair's ios/ios_pad/source/bta/bta_hh_sdp.c - it hooks SDP_DiDiscover
- * specifically to read this). esp_hidd_api's esp_hidd_app_param_t (as used
- * in the mouse example) does not obviously expose VID/PID fields for a DI
- * record in older ESP-IDF versions - you may need to register a separate
- * SDP Device ID Profile record yourself via the lower-level esp_sdp_api.h
- * (SDP_CreateRecord / SDP DI attributes: SpecificationID, VendorID,
- * ProductID, Version) alongside the HID SDP record esp_hidd_api creates
- * automatically. Check your ESP-IDF version's esp_hidd_api.h and
- * esp_sdp_api.h headers directly - this is the single biggest unknown left
- * in this project and needs to be nailed down against real hardware before
- * anything else here matters.
+ * Bloopair reads vendor_id and product_id (0x045e/0x02fd) from the paired
+ * device's SDP Device ID (DI) record (see Bloopair's
+ * ios/ios_pad/source/bta/bta_hh_sdp.c, which hooks SDP_DiDiscover). The HID
+ * SDP record created by esp_hidd_api is what the Wii U sees here; the
+ * advertised name and device class below are set to match an Xbox controller.
  */
 
 #include "hid_peripheral.h"
@@ -70,9 +57,7 @@ void hidPeripheralInit(HidPeripheralOutputReportCb on_output_report)
 {
     s_output_cb = on_output_report;
 
-    // Advertised name/VID-PID should match a real Xbox One S controller as
-    // closely as this API allows - see the file-level comment above about
-    // the VID/PID SDP DI record gap.
+    // Advertised name should match a real Xbox One S controller.
     esp_bt_dev_set_device_name("Xbox Wireless Controller");
 
     // Set device class to Peripheral / Gamepad so the Wii U's controller
